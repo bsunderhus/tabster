@@ -3,34 +3,39 @@
  * Licensed under the MIT License.
  */
 
-import { createKeyborg, disposeKeyborg, Keyborg } from 'keyborg';
-
+import {
+    createKeyborgIfMissing,
+    isNavigatingWithKeyboard,
+    Keyborg,
+    KEYBORG_UPDATE,
+    setNavigatingWithKeyboard,
+    UpdateEvent
+} from 'keyborg';
 import { Subscribable } from './Subscribable';
 import * as Types from '../Types';
 
-export class KeyboardNavigationState extends Subscribable<boolean> implements Types.KeyboardNavigationState {
+export class KeyboardNavigationState extends Subscribable<boolean>
+    implements Types.KeyboardNavigationState {
     private _keyborg?: Keyborg;
 
     constructor(getWindow: Types.GetWindow) {
         super();
-        this._keyborg = createKeyborg(getWindow());
-        this._keyborg.subscribe(this._onChange);
+        this._keyborg = createKeyborgIfMissing(getWindow());
+        this._keyborg.addEventListener(KEYBORG_UPDATE, this._onChange);
     }
 
     protected dispose(): void {
         super.dispose();
 
         if (this._keyborg) {
-            this._keyborg.unsubscribe(this._onChange);
-
-            disposeKeyborg(this._keyborg);
+            this._keyborg.removeEventListener(KEYBORG_UPDATE, this._onChange);
 
             delete this._keyborg;
         }
     }
 
-    private _onChange = (isNavigatingWithKeyboard: boolean) => {
-        this.setVal(isNavigatingWithKeyboard, undefined);
+    private _onChange = (event: UpdateEvent) => {
+        this.setVal(event.detail.isNavigatingWithKeyboard, undefined);
     }
 
     static dispose(instance: Types.KeyboardNavigationState): void {
@@ -38,10 +43,10 @@ export class KeyboardNavigationState extends Subscribable<boolean> implements Ty
     }
 
     static setVal(instance: Types.KeyboardNavigationState, val: boolean): void {
-        (instance as KeyboardNavigationState)._keyborg?.setVal(val);
+        setNavigatingWithKeyboard(val);
     }
 
     isNavigatingWithKeyboard(): boolean {
-        return !!this._keyborg?.isNavigatingWithKeyboard();
+        return isNavigatingWithKeyboard();
     }
 }

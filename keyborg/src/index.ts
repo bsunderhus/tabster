@@ -4,15 +4,19 @@
  */
 
 export {
-    Keyborg,
-    createKeyborg,
-    disposeKeyborg
-} from './Keyborg';
+    createKeyborgIfMissing,
+    isNavigatingWithKeyboard,
+    setNavigatingWithKeyboard
+} from './keyborg';
+
+export { getLastFocusedProgrammatically, nativeFocus } from './FocusEvent';
+
+export { KEYBORG_FOCUSIN, KEYBORG_UPDATE } from './constants';
 
 export {
-    getLastFocusedProgrammatically,
-    nativeFocus,
-    KEYBORG_FOCUSIN,
+    Keyborg,
+    KeyborgEventMap,
+    UpdateEvent,
     KeyborgFocusInEvent,
     KeyborgFocusInEventDetails
-} from './FocusEvent';
+} from './types';
