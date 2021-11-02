@@ -19,7 +19,8 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "paths": {
-      "tabster": ["tabster/src/index.ts"]
+      "tabster": ["tabster/src/index.ts"],
+      "keyborg": ["keyborg/src/index.ts"],
     },
     "baseUrl": "."
   },
