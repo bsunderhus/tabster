@@ -15,9 +15,7 @@ export {
     createKeyborgIfMissing,
     isNavigatingWithKeyboard,
     Keyborg,
-    KeyborgEventMap,
-    KEYBORG_UPDATE,
-    setNavigatingWithKeyboard,
-    UpdateDetail,
-    UpdateEvent
+    setNavigatingWithKeyboard
 } from './Keyborg';
+
+export { KEYBORG_UPDATE, KeyborgEventMap, UpdateDetail, UpdateEvent } from './types';

@@ -25,9 +25,14 @@ export interface TabsterDOMAttribute {
 
 export interface TabsterCoreProps {
     autoRoot?: RootProps;
+    /**
+     * Allows all tab key presses under the tabster root to be controlled by tabster
+     * @default true
+     */
+    controlTab?: boolean;
 }
 
-export interface TabsterCore {
+export interface TabsterCore extends Pick<TabsterCoreProps, 'controlTab'> {
     keyboardNavigation: KeyboardNavigationState;
     focusedElement: FocusedElementState;
     focusable: FocusableAPI;
@@ -585,17 +590,19 @@ export interface TabsterContext {
     uncontrolled?: HTMLElement;
 }
 
+export interface RootFocusEventDetails {
+    element: HTMLElement;
+    fromAdjacent?: boolean;
+}
+
 export interface RootAPI {
+    eventTarget: EventTarget;
 }
 
 export interface UncontrolledAPI {
 }
 
 export interface ModalizerAPI {
-    /**
-     * Gets the currently active modalizer if it exists
-     */
-    getActiveModalizer(): Modalizer | undefined;
     /**
      * Activates a Modalizer and focuses the first or default element within
      *

@@ -11,97 +11,64 @@ import {
     WindowWithKeyborgFocusEvent
 } from './FocusEvent';
 
-export const KEYBORG_UPDATE = 'keyborg:update' as const;
-
-export interface KeyborgEventMap {
-    [KEYBORG_UPDATE]: UpdateEvent;
-}
-
-export interface KeyborgOptions {
-    /**
-     * When Esc is pressed and the focused is not moved
-     * during _dismissTimeout time, dismiss the keyboard
-     * navigation mode.
-     */
-    dismissTimeout?: number;
-}
-
-/**
- * @internal
- */
-export interface WindowWithKeyborg extends Window {
-    __keyborg?: Keyborg;
-}
-
-export type UpdateDetail = { isNavigatingWithKeyboard: boolean };
-export type UpdateEvent = CustomEvent<UpdateDetail>;
+import {
+    assertKeyborgActiveState,
+    isKeyborgActiveState,
+    KeyborgEventMap,
+    KeyborgOptions,
+    KeyborgTypestate,
+    KEYBORG_UPDATE,
+    UpdateDetail,
+    WindowWithKeyborg
+} from './types';
 
 const KeyTab = 9;
 const KeyEsc = 27;
 
 let _windowRef: WindowWithKeyborg | undefined = undefined;
 
-function getKeyborg(): Keyborg {
-    if (_windowRef?.__keyborg === undefined) {
-        throw new Error(
-            `There's no keyborg defined yet, invoke ${createKeyborgIfMissing.name}`
-        );
-    }
-    return _windowRef.__keyborg as Keyborg;
-}
-
-export function setNavigatingWithKeyboard(value: boolean): void {
-    getKeyborg().setNavigatingWithKeyboard(value);
-}
-
-/**
- * @returns Whether the user is navigating with keyboard
- */
-export function isNavigatingWithKeyboard(): boolean {
-    return getKeyborg().isNavigatingWithKeyboard();
-}
-
 /**
  * creates a global keyborg instance if missing
  * otherwise returns global keyborg instance
  * @returns
  */
-export function createKeyborgIfMissing(windowRef: Window): Keyborg {
+export function createKeyborgIfMissing(windowRef: Window, options?: Partial<KeyborgOptions>): Keyborg {
     _windowRef = windowRef as WindowWithKeyborg;
     if (!_windowRef.__keyborg) {
-        _windowRef.__keyborg = new Keyborg(_windowRef);
+        _windowRef.__keyborg = new Keyborg(_windowRef, options);
     }
     return _windowRef.__keyborg;
 }
 
 export class Keyborg {
-    private _windowRef: Window;
-    private _timeoutID?: number;
-    private _isMouseUsed: boolean = false;
-    private _isNavigatingWithKeyboard: boolean = false;
-    private _listeners = new Set<EventListener>();
-    private _eventTarget = new EventTarget();
+    private _state: KeyborgTypestate = {
+        value: 'disposed',
+        context: {
+            windowRef: undefined,
+            isMouseUsed: false,
+            isNavigatingWithKeyboard: false,
+            listeners: new Set<WeakRef<EventListener>>(),
+            eventTarget: new EventTarget()
+        }
+    };
     private _options: KeyborgOptions;
 
     constructor(windowRef: Window, options?: Partial<KeyborgOptions>) {
-        this._windowRef = windowRef;
-        this._options = {
-            dismissTimeout: 500,
-            ...options
-        };
-        this._dangerouslyActivate();
+        this._options = { dismissTimeout: 500, ...options };
+        // activate listeners when keyborg instance is created
+        this._dangerouslyActivate(windowRef);
     }
 
     public isNavigatingWithKeyboard() {
-        return this._isNavigatingWithKeyboard;
+        return this._state.context.isNavigatingWithKeyboard;
     }
 
     public setNavigatingWithKeyboard(value: boolean) {
-        if (this._isNavigatingWithKeyboard === value) {
+        if (this._state.context.isNavigatingWithKeyboard === value) {
             return;
         }
-        this._isNavigatingWithKeyboard = value;
-        this._eventTarget.dispatchEvent(
+        this._state.context.isNavigatingWithKeyboard = value;
+        this._state.context.eventTarget.dispatchEvent(
             new CustomEvent<UpdateDetail>(KEYBORG_UPDATE, {
                 detail: { isNavigatingWithKeyboard: value }
             })
@@ -112,77 +79,125 @@ export class Keyborg {
         type: K,
         listener: (ev: KeyborgEventMap[K]) => void
     ): void {
-        this._listeners.add(listener);
-        this._eventTarget.addEventListener(type, listener);
-        if (this._listeners.size === 1) {
-            this._dangerouslyActivate();
-        }
+        this._state.context.listeners.add(new WeakRef(listener));
+        this._state.context.eventTarget.addEventListener(type, listener);
     }
+
     public removeEventListener<K extends keyof KeyborgEventMap>(
         type: K,
         listener: (ev: KeyborgEventMap[K]) => void
     ): void {
-        this._listeners.delete(listener);
-        if (this._listeners.size === 0) {
+        for (const ref of this._state.context.listeners) {
+            const listenerOrUndef = ref.deref();
+            if (listenerOrUndef === listener || listenerOrUndef === undefined) {
+                this._state.context.listeners.delete(ref);
+            }
+        }
+        // disposes keyborg instance if no one is listening to it
+        if (this._state.context.listeners.size === 0) {
             this._dangerouslyDispose();
         }
-        this._eventTarget.removeEventListener(type, listener);
+        this._state.context.eventTarget.removeEventListener(type, listener);
     }
 
-    private _dangerouslyActivate(): void {
-        const { document } = this._windowRef;
+    /**
+     * The prefix dangerously indicates that this method doesn't do any verification!
+     *
+     * Adds event listeners to document
+     */
+    private _dangerouslyActivate(windowRef: Window): void {
+        this._state.value = 'active';
+        this._state.context.windowRef = windowRef as WindowWithKeyborg &
+            WindowWithKeyborgFocusEvent;
+        const { document } = windowRef;
         document.addEventListener(KEYBORG_FOCUSIN, this._handleFocusIn, true); // Capture!
         document.addEventListener('mousedown', this._handleMouseDown, true); // Capture!
         addEventListener('keydown', this._handleKeyDown, true); // Capture!
-        setupFocusEvent(this._windowRef as WindowWithKeyborgFocusEvent);
-        (this._windowRef as WindowWithKeyborg).__keyborg = this;
+        setupFocusEvent(this._state.context.windowRef);
+        this._state.context.windowRef.__keyborg = this;
     }
 
+    /**
+     * The prefix dangerously indicates that this method doesn't do any verification!
+     *
+     * Removes event listeners from document, clears existing timeout,
+     * and finally, removes this instance from window reference and also removes window reference
+     */
     private _dangerouslyDispose(): void {
-        if (this._timeoutID) {
-            this._windowRef.clearTimeout(this._timeoutID);
-            this._timeoutID = undefined;
-        }
-
-        disposeFocusEvent(this._windowRef);
-
-        const doc = this._windowRef.document;
-
-        doc.removeEventListener(KEYBORG_FOCUSIN, this._handleFocusIn, true); // Capture!
-        doc.removeEventListener('mousedown', this._handleMouseDown, true); // Capture!
-        this._windowRef.removeEventListener(
-            'keydown',
-            this._handleKeyDown,
-            true
-        ); // Capture!
-        (this._windowRef as WindowWithKeyborg).__keyborg = undefined;
-    }
-
-    private _scheduleDismiss(): void {
-        if (this._timeoutID) {
-            this._windowRef.clearTimeout(this._timeoutID);
-            this._timeoutID = undefined;
-        }
-
-        const previousActiveElement = this._windowRef.document.activeElement;
-
-        this._timeoutID = this._windowRef.setTimeout(() => {
-            this._timeoutID = undefined;
-
-            const currentActiveElement = this._windowRef.document.activeElement;
-
-            if (
-                previousActiveElement &&
-                currentActiveElement &&
-                previousActiveElement === currentActiveElement
-            ) {
-                // Esc was pressed, currently focused element hasn't changed.
-                // Just dismiss the keyboard navigation mode.
-                this.setNavigatingWithKeyboard(false);
+        if (isKeyborgActiveState(this._state)) {
+            if (this._state.context.timeoutID) {
+                this._state.context.windowRef.clearTimeout(
+                    this._state.context.timeoutID
+                );
+                this._state.context.timeoutID = undefined;
             }
-        }, this._options.dismissTimeout);
+
+            disposeFocusEvent(this._state.context.windowRef);
+
+            const doc = this._state.context.windowRef.document;
+
+            doc.removeEventListener(KEYBORG_FOCUSIN, this._handleFocusIn, true); // Capture!
+            doc.removeEventListener('mousedown', this._handleMouseDown, true); // Capture!
+            this._state.context.windowRef.removeEventListener(
+                'keydown',
+                this._handleKeyDown,
+                true
+            ); // Capture!
+            (_windowRef as WindowWithKeyborg).__keyborg = undefined;
+            _windowRef = undefined;
+        }
+        this._state.value = 'disposed';
+        this._state.context.windowRef = undefined;
     }
+
+    /**
+     * Schedules dismissing, which means setting navigating with keyboard to false,
+     * most likely invoked when ESC is pressed
+     */
+    private _scheduleDismiss(): void {
+        assertKeyborgActiveState(this._state, this._scheduleDismiss.name);
+        if (this._state.context.timeoutID) {
+            this._state.context.windowRef.clearTimeout(
+                this._state.context.timeoutID
+            );
+            this._state.context.timeoutID = undefined;
+        }
+
+        const previousActiveElement = this._state.context.windowRef.document
+            .activeElement;
+
+        this._state.context.timeoutID = this._state.context.windowRef.setTimeout(
+            () => {
+                if (isKeyborgActiveState(this._state)) {
+                    this._state.context.timeoutID = undefined;
+
+                    const currentActiveElement = this._state.context.windowRef
+                        .document.activeElement;
+
+                    if (
+                        previousActiveElement &&
+                        currentActiveElement &&
+                        previousActiveElement === currentActiveElement
+                    ) {
+                        // Esc was pressed, currently focused element hasn't changed.
+                        // Just dismiss the keyboard navigation mode.
+                        this.setNavigatingWithKeyboard(false);
+                    }
+                }
+            },
+            this._options.dismissTimeout
+        );
+    }
+
+    /**
+     * on mousedown
+     *
+     * sets the mouse has been used and is navigating with mouse
+     *
+     * the exception is for the case when it's a click simulation done by screen readers
+     */
     private _handleMouseDown = (event: MouseEvent): void => {
+        assertKeyborgActiveState(this._state, this._handleMouseDown.name);
         if (
             event.buttons === 0 ||
             (event.clientX === 0 &&
@@ -195,14 +210,15 @@ export class Keyborg {
             return;
         }
 
-        this._isMouseUsed = true;
+        this._state.context.isMouseUsed = true;
 
         this.setNavigatingWithKeyboard(false);
     }
 
     private _handleFocusIn = (event: KeyborgFocusInEvent): void => {
-        if (this._isMouseUsed) {
-            this._isMouseUsed = false;
+        assertKeyborgActiveState(this._state, this._handleFocusIn.name);
+        if (this._state.context.isMouseUsed) {
+            this._state.context.isMouseUsed = false;
             return;
         }
 
@@ -228,11 +244,53 @@ export class Keyborg {
         this.setNavigatingWithKeyboard(true);
     }
 
+    /**
+     * on keydown
+     *
+     * if keyborg is not navigating with keyboard and tab is pressed
+     * set navigating with keyboard
+     *
+     * else if keyborg is navigating with keyboard and ESC is pressed
+     * invoke scheduling dismiss
+     */
     private _handleKeyDown = (event: KeyboardEvent): void => {
-        if (!this._isNavigatingWithKeyboard && event.keyCode === KeyTab) {
+        assertKeyborgActiveState(this._state, this._handleKeyDown.name);
+        if (
+            !this._state.context.isNavigatingWithKeyboard &&
+            event.keyCode === KeyTab
+        ) {
             this.setNavigatingWithKeyboard(true);
-        } else if (this._isNavigatingWithKeyboard && event.keyCode === KeyEsc) {
+        } else if (
+            this._state.context.isNavigatingWithKeyboard &&
+            event.keyCode === KeyEsc
+        ) {
             this._scheduleDismiss();
         }
     }
+}
+
+/**
+ * Gets global instance of keyborg and invokes setNavigatingWithKeyboard method
+ * to force navigation value
+ */
+export function setNavigatingWithKeyboard(value: boolean): void {
+    if (_windowRef?.__keyborg) {
+        return _windowRef.__keyborg.setNavigatingWithKeyboard(value);
+    }
+    throw new Error(
+        `There's no keyborg defined yet, invoke ${createKeyborgIfMissing.name} before ${setNavigatingWithKeyboard.name}`
+    );
+}
+
+/**
+ * Gets global instance of keyborg and invokes isNavigatingWithKeyboard method
+ * @returns Whether the user is navigating with keyboard
+ */
+export function isNavigatingWithKeyboard(): boolean {
+    if (_windowRef?.__keyborg) {
+        return _windowRef.__keyborg.isNavigatingWithKeyboard();
+    }
+    throw new Error(
+        `There's no keyborg defined yet, invoke ${createKeyborgIfMissing.name} before ${isNavigatingWithKeyboard.name}`
+    );
 }
